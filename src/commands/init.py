@@ -18,7 +18,8 @@ from lib import ui
 
 # 默认配置，字段与 sync / pack 命令读取的 data 字段保持一致
 DEFAULT_CONFIG = {
-    "version": "0.0.1",
+    "version": "0.0.2",
+    "name": "map",
     "data": {
         "sync": {
             "optimize": True,
@@ -32,7 +33,7 @@ DEFAULT_CONFIG = {
         "pack": {
             "input_path": "./map",
             "output_path": "./dist",
-            "name": "map",
+            "name": "{name} {date}-{hash}",
             "format": "zip",
             "compression_level": 6,
             "minify_datapack": True,
@@ -42,6 +43,55 @@ DEFAULT_CONFIG = {
 
 # 初始化时写入 .gitignore 的内容
 GITIGNORE_CONTENT = ".env\ndist\n"
+
+# 初始化时生成的 GitHub Actions 工作流：每次推送自动打包并发布到发行版
+WORKFLOW_PATH = Path(".github") / "workflows" / "pack.yml"
+
+WORKFLOW_CONTENT = """\
+name: Pack Map
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install map-packer
+        run: pip install map-packer
+
+      - name: Pack map
+        run: mmp pack
+
+      - name: Resolve archive
+        id: archive
+        run: |
+          archive="$(ls -t dist/* | head -n 1)"
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$archive")" >> "$GITHUB_OUTPUT"
+          echo "tag=$(basename "$archive" | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.archive.outputs.tag }}" \\
+            "${{ steps.archive.outputs.path }}" \\
+            --title "${{ steps.archive.outputs.name }}" \\
+            --notes "$(git log -1 --pretty=%B)"
+"""
 
 
 def _run_git_init(cwd: Path) -> bool:
@@ -69,6 +119,8 @@ def init() -> None:
     Rules:
     - run `git init` in the current directory when git is available;
     - write the default mmp.json when it does not exist yet;
+    - generate .github/workflows/pack.yml so every push packs the map and
+      publishes the archive to a GitHub release;
     - create the output directory from data.sync.output_path.
 
     Raises:
@@ -111,6 +163,15 @@ def init() -> None:
         json.dump(DEFAULT_CONFIG, f, indent=4)
         f.write("\n")
     ui.phase("Config", f"[path]{escape(str(config_path))}[/path]")
+
+    # 生成 GitHub Actions 工作流：每次推送自动打包并发布到发行版
+    workflow_path = cwd / WORKFLOW_PATH
+    if workflow_path.exists():
+        ui.phase("Workflow", "[muted]skipped · already exists[/muted]")
+    else:
+        workflow_path.parent.mkdir(parents=True, exist_ok=True)
+        workflow_path.write_text(WORKFLOW_CONTENT, encoding="utf-8")
+        ui.phase("Workflow", f"[path]{escape(WORKFLOW_PATH.as_posix())}[/path]")
 
     # 创建地图输出目录
     output_path = Path(DEFAULT_CONFIG["data"]["sync"]["output_path"])

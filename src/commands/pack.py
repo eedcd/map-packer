@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import tarfile
 import time
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -30,7 +32,8 @@ from lib.datapack import minify_datapacks
 # 各配置项的默认值，字段与 init 写入的 data.pack 保持一致
 DEFAULT_INPUT = "./map"
 DEFAULT_OUTPUT = "./dist"
-DEFAULT_NAME = "map"
+DEFAULT_MAP_NAME = "map"
+DEFAULT_NAME = "{name} {date}-{hash}"
 DEFAULT_FORMAT = "zip"
 DEFAULT_COMPRESSION_LEVEL = 6
 DEFAULT_MINIFY_DATAPACK = True
@@ -66,6 +69,54 @@ def _level_range(fmt: str) -> tuple[int, int] | None:
     if fmt == "tar.bz2":
         return (1, 9)
     return (0, 9)
+
+
+def _expand_name(template: str, map_name: str) -> str:
+    """把 pack.name 模板展开为最终归档名
+
+    支持的占位符：
+    - {name}      地图名称，来自配置顶层的 name 字段
+    - {date}      当前日期，格式 YYYYMMDD
+    - {time}      当前时间，格式 HHMMSS
+    - {datetime}  当前日期时间，格式 YYYYMMDDHHMMSS
+    - {timestamp} 当前 Unix 时间戳（秒）
+    - {hash}      时间戳 SHA-256 摘要的前 6 位十六进制字符
+    """
+    now = time.time()
+    moment = datetime.fromtimestamp(now)
+    fields = {
+        "name": map_name,
+        "date": moment.strftime("%Y%m%d"),
+        "time": moment.strftime("%H%M%S"),
+        "datetime": moment.strftime("%Y%m%d%H%M%S"),
+        "timestamp": str(int(now)),
+        "hash": hashlib.sha256(str(int(now)).encode("utf-8")).hexdigest()[:6],
+    }
+
+    try:
+        expanded = template.format_map(fields)
+    except KeyError as exc:
+        unknown = str(exc).strip("'")
+        ui.error(
+            f"Unknown placeholder [path]{{{escape(unknown)}}}[/path] "
+            f"in [path]data.pack.name[/path]",
+            hint="available placeholders: " + ", ".join(f"{{{key}}}" for key in fields),
+        )
+        raise typer.Exit(code=1)
+    except ValueError as exc:
+        ui.error(
+            f"Invalid [path]data.pack.name[/path] template: {escape(str(exc))}"
+        )
+        raise typer.Exit(code=1)
+
+    expanded = expanded.strip()
+    if not expanded:
+        ui.error(
+            "[path]data.pack.name[/path] template produced an empty name",
+            hint="set a non-empty name or use placeholders such as {name}",
+        )
+        raise typer.Exit(code=1)
+    return expanded
 
 
 def _collect_files(root: Path) -> list[tuple[Path, str]]:
@@ -128,12 +179,16 @@ def pack(
     Rules:
     - the source directory, output directory, archive name, format and
       compression level come from the "data.pack" field in mmp.json;
+    - "data.pack.name" is a template: {name} is the map name from the
+      top-level "name" field, while {date}, {time}, {datetime}, {timestamp}
+      and {hash} (first 6 hex chars of the timestamp SHA-256) expand at pack
+      time;
     - when "data.pack.minify_datapack" is enabled, datapack text files have their
       comments (lines starting with #) and blank lines removed, and every JSON
       file is rewritten without indentation or spaces before packing;
     - the packed size change and shrink percentage are reported when packing;
     - supported formats are zip, tar, tar.gz, tar.bz2 and tar.xz;
-    - mmp.json must declare version 0.0.1, the only supported format version.
+    - mmp.json must declare version 0.0.2, the only supported format version.
 
     Args:
         config: Path to the mmp.json configuration file.
@@ -161,7 +216,10 @@ def pack(
     output_dir = (
         Path(pack_config.get("output_path", DEFAULT_OUTPUT)).expanduser().resolve()
     )
-    name = str(pack_config.get("name", DEFAULT_NAME))
+    name = _expand_name(
+        str(pack_config.get("name", DEFAULT_NAME)),
+        str(config_data.get("name", DEFAULT_MAP_NAME)),
+    )
     fmt = _normalize_format(str(pack_config.get("format", DEFAULT_FORMAT)))
     try:
         level = int(pack_config.get("compression_level", DEFAULT_COMPRESSION_LEVEL))
@@ -207,6 +265,7 @@ def pack(
         [
             ("Source", f"[path]{escape(str(source))}[/path]"),
             ("Output", f"[path]{escape(str(target))}[/path]"),
+            ("Name", f"[value]{escape(name)}[/value]"),
             ("Format", f"[value]{escape(fmt)}[/value]"),
             ("Level", f"[num]{level}[/num]" if bounds else "[muted]n/a[/muted]"),
             ("Minify", "[ok]enabled[/ok]" if minify else "[muted]disabled[/muted]"),

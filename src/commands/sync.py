@@ -218,7 +218,7 @@ def sync(
     - files present only in the target are deleted;
     - the target directory, ignore rules and sync options come from the
       "data.sync" field in mmp.json;
-    - mmp.json must declare version 0.0.1, the only supported format version.
+    - mmp.json must declare version 0.0.2, the only supported format version.
     - when prune is enabled, chunks that were generated from world noise and never
       modified (no entities, block entities, ticks or block changes) are removed
       after syncing; the game regenerates them from the seed on first load.

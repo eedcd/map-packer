@@ -3,7 +3,7 @@
 import json
 
 # 当前唯一支持的配置文件格式版本
-SUPPORTED_VERSION = "0.0.1"
+SUPPORTED_VERSION = "0.0.2"
 
 
 def get_config(path: str = "./mmp.json") -> dict:
