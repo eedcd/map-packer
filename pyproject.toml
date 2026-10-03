@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "map-packer"
+version = "0.1.0"
+description = "A Minecraft Map Packer CLI Tool"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+
+dependencies = [
+    "nbtlib>=2.0.4",
+    "python-dotenv>=1.2.4",
+    "rich>=15.0.0",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+mmp = "cli:app"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["cli"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
