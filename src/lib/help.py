@@ -19,23 +19,19 @@ HELPS_DIR = Path(__file__).parent.parent / "helps"
 
 
 def _load_help_file(name: str) -> str | None:
-    """加载帮助文件内容
+    """加载帮助文件内容 (固定 .txt 后缀)
 
     Args:
-        name: 文件名或命令名
+        name: 命令名
 
     Returns:
         文件内容，如果未找到则返回 None
     """
-    # 尝试不同的文件扩展名
-    for ext in (".txt", ""):
-        file_path = HELPS_DIR / f"{name}{ext}"
-        if file_path.exists():
-            try:
-                return file_path.read_text(encoding="utf-8")
-            except Exception:
-                pass
-    return None
+    file_path = HELPS_DIR / f"{name}.txt"
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except Exception:
+        return None
 
 
 def get_command_help(command: str) -> tuple[str, str] | None:
