@@ -1,0 +1,17 @@
+初始化项目
+====================
+
+在当前位置创建 mmp 项目：
+
+- 自动执行 `git init`（如果 git 可用）
+- 交互式询问存档路径并保存到 `mmp.json`
+- 生成 `mmp.json` 默认配置
+- 创建 `.github/workflows/pack.yml`（用于 GitHub 发布）
+- 创建地图输出目录
+
+使用方式:
+  mmp init
+
+示例:
+  mmp init
+  # 跟随提示输入你的 Minecraft 世界存档目录

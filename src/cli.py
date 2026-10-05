@@ -8,7 +8,9 @@ from importlib.metadata import version as package_version
 
 import typer
 
+from commands.help import help as help_command
 from commands.init import init as init_command
+from commands.once import once as once_command
 from commands.pack import pack as pack_command
 from commands.sync import sync as sync_command
 from lib import ui
@@ -62,6 +64,11 @@ app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 
+# 注册子命令：mmp help
+app.command(name="help", help="Show help information for commands")(
+    help_command
+)
+
 # 注册子命令：mmp init
 app.command(name="init", help="Initialize the current directory as an mmp repository")(
     init_command
@@ -73,6 +80,11 @@ app.command(name="sync", help="Sync a world save into the target directory")(syn
 # 注册子命令：mmp pack
 app.command(name="pack", help="Pack the map directory into a compressed archive")(
     pack_command
+)
+
+# 注册子命令：mmp once
+app.command(name="once", help="Pack the map directory into a compressed archive without versioning")(
+    once_command
 )
 
 

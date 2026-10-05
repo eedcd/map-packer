@@ -1,12 +1,13 @@
 """初始化命令
 
-把当前目录初始化为一个 mmp 仓库：尝试执行 git init、写入默认的
-mmp.json 配置，并创建地图输出目录
+把当前目录初始化为一个 mmp 仓库：交互式输入存档路径，写入 mmp.json
+配置文件，生成 GitHub Actions 工作流，并创建地图输出目录
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -41,8 +42,8 @@ DEFAULT_CONFIG = {
     },
 }
 
-# 初始化时写入 .gitignore 的内容
-GITIGNORE_CONTENT = ".env\ndist\n"
+# 初始化时写入 .gitignore 的内容 (移除 .env)
+GITIGNORE_CONTENT = "dist\n"
 
 # 初始化时生成的 GitHub Actions 工作流：每次推送自动打包并发布到发行版
 WORKFLOW_PATH = Path(".github") / "workflows" / "pack.yml"
@@ -119,6 +120,7 @@ def init() -> None:
     Rules:
     - run `git init` in the current directory when git is available;
     - write the default mmp.json when it does not exist yet;
+    - ask for the world save path interactively;
     - generate .github/workflows/pack.yml so every push packs the map and
       publishes the archive to a GitHub release;
     - create the output directory from data.sync.output_path.
@@ -144,12 +146,13 @@ def init() -> None:
     else:
         ui.phase("Git", "[muted]skipped · git not available[/muted]")
 
-    # 写入 .gitignore（追加模式，若已有该文件则保留原有内容）
+    # 写入 .gitignore (移除 .env)
     gitignore_path = cwd / ".gitignore"
     needs_gitignore = False
     if gitignore_path.exists():
         content = gitignore_path.read_text(encoding="utf-8")
-        if ".env" not in content.splitlines():
+        # 避免重复添加 dist
+        if "dist" not in content.splitlines():
             gitignore_path.write_text(content + GITIGNORE_CONTENT, encoding="utf-8")
             needs_gitignore = True
     else:
@@ -158,13 +161,38 @@ def init() -> None:
     if needs_gitignore:
         ui.phase("Gitignore", f"[path].gitignore[/path]")
 
-    # 写入默认配置
+    # 交互式输入存档路径
+    save_path = typer.prompt(
+        "Minecraft world save directory",
+        default="",
+    )
+    save_path = save_path.strip()
+    if not save_path:
+        ui.error("[err]Save path is required[/err]")
+        raise typer.Exit(code=1)
+
+    # 校验路径是否存在
+    save_path_obj = Path(save_path).expanduser().resolve()
+    if not save_path_obj.is_dir():
+        ui.error(
+            f"Directory not found: [path]{escape(str(save_path_obj))}[/path]",
+            hint="please provide a valid world save directory",
+        )
+        raise typer.Exit(code=1)
+
+    ui.phase("Save path", f"[path]{escape(str(save_path_obj))}[/path]")
+
+    # 创建包含 save_path 的配置
+    config = json.loads(json.dumps(DEFAULT_CONFIG))  # 深拷贝
+    config["data"]["sync"]["save_path"] = str(save_path_obj)
+
+    # 写入配置
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(DEFAULT_CONFIG, f, indent=4)
+        json.dump(config, f, indent=4)
         f.write("\n")
     ui.phase("Config", f"[path]{escape(str(config_path))}[/path]")
 
-    # 生成 GitHub Actions 工作流：每次推送自动打包并发布到发行版
+    # 生成 GitHub Actions 工作流
     workflow_path = cwd / WORKFLOW_PATH
     if workflow_path.exists():
         ui.phase("Workflow", "[muted]skipped · already exists[/muted]")
@@ -174,10 +202,11 @@ def init() -> None:
         ui.phase("Workflow", f"[path]{escape(WORKFLOW_PATH.as_posix())}[/path]")
 
     # 创建地图输出目录
-    output_path = Path(DEFAULT_CONFIG["data"]["sync"]["output_path"])
+    output_path = Path(config["data"]["sync"]["output_path"])
     target = (cwd / output_path).resolve()
     target.mkdir(parents=True, exist_ok=True)
     ui.phase("Map", f"[path]{escape(str(target))}[/path]")
 
     ui.blank()
     ui.success("[bold]Initialized mmp repository[/bold]")
+

@@ -1,7 +1,7 @@
 """地图同步命令
 
-将 Minecraft 存档目录（由 .env 中的 SAVE_PATH 指定）同步到目标目录，
-忽略规则通过 mmp.json 的 data.exclude 字段配置
+将 Minecraft 存档目录（由 mmp.json 的 data.sync.save_path 指定）同步到目标目录，
+忽略规则通过 mmp.json 的 data.sync.exclude 字段配置
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import time
 from pathlib import Path
 
 import typer
-from dotenv import find_dotenv, load_dotenv
 from rich.markup import escape
 from rich.progress import (
     BarColumn,
@@ -129,7 +128,7 @@ def _same_file(a: Path, b: Path) -> bool:
         return False
 
 
-def _files_match(src: Path, dst: Path, optimize: bool, prune: bool) -> bzool:
+def _files_match(src: Path, dst: Path, optimize: bool, prune: bool) -> bool:
     """判断源文件与目标文件是否一致
 
     启用 prune / optimize 时，已被剔除区块或擦除缓存的 region 文件与源文件
@@ -211,13 +210,13 @@ def sync(
         help="Path to the mmp.json configuration file",
     ),
 ) -> None:
-    """Sync the SAVE_PATH world save into the target directory.
+    """Sync the world save into the target directory.
 
     Rules:
     - files that are new or changed in the source are copied to the target;
     - files present only in the target are deleted;
-    - the target directory, ignore rules and sync options come from the
-      "data.sync" field in mmp.json;
+    - the source directory, target directory, ignore rules and sync options
+      come from the "data.sync" field in mmp.json;
     - mmp.json must declare version 0.0.2, the only supported format version.
     - when prune is enabled, chunks that were generated from world noise and never
       modified (no entities, block entities, ticks or block changes) are removed
@@ -231,31 +230,10 @@ def sync(
         config: Path to the mmp.json configuration file.
 
     Raises:
-        typer.Exit: When SAVE_PATH is unset or is not a valid directory, or the
-            mmp.json version is unsupported.
+        typer.Exit: When save_path is not set in mmp.json or is not a valid
+            directory, or the mmp.json version is unsupported.
     """
-    env_file = find_dotenv(usecwd=True)
-    if env_file:
-        load_dotenv(env_file)
-
     # 读取并校验存档目录
-    save_path_raw = os.getenv("SAVE_PATH")
-    if not save_path_raw:
-        ui.error(
-            "SAVE_PATH is not set",
-            hint="add SAVE_PATH=<world save directory> to your .env",
-        )
-        raise typer.Exit(code=1)
-
-    save_path = Path(save_path_raw).expanduser().resolve()
-    if not save_path.is_dir():
-        ui.error(
-            f"SAVE_PATH is not a directory: [path]{escape(str(save_path))}[/path]",
-            hint="point SAVE_PATH in .env at an existing world save",
-        )
-        raise typer.Exit(code=1)
-
-    # 读取配置：忽略规则与同步选项位于 mmp.json 的 data.sync 字段
     config_data = get_config(config)
     version = config_data.get("version")
     if version != SUPPORTED_VERSION:
@@ -267,6 +245,23 @@ def sync(
 
     data = config_data.get("data") or {}
     sync_config = data.get("sync") or {}
+
+    # 从配置读取存档路径
+    save_path_raw = sync_config.get("save_path")
+    if not save_path_raw:
+        ui.error(
+            "save_path is not configured",
+            hint="run mmp init to set it up, or edit mmp.json manually",
+        )
+        raise typer.Exit(code=1)
+
+    save_path = Path(save_path_raw).expanduser().resolve()
+    if not save_path.is_dir():
+        ui.error(
+            f"save_path is not a directory: [path]{escape(str(save_path))}[/path]",
+            hint="check the path in mmp.json",
+        )
+        raise typer.Exit(code=1)
 
     optimize = bool(sync_config.get("optimize", True))
     prune = bool(sync_config.get("prune", True))

@@ -1,0 +1,14 @@
+同步世界
+====================
+
+将 Minecraft 存档同步到项目目录：
+
+- 从 `mmp.json` 的 `data.sync.save_path` 读取源世界
+- 根据 `mmp.json` 配置忽略规则
+- 可选剔除未使用区块和优化缓存
+
+使用方式:
+  mmp sync [-c <config>]
+
+说明:
+  -c, --config    配置文件路径（默认：./mmp.json）
