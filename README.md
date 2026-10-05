@@ -3,8 +3,193 @@
 [![PyPI - Version](https://img.shields.io/pypi/v/map-packer.svg)](https://pypi.org/project/map-packer/)
 [![PyPI - License](https://img.shields.io/pypi/l/map-packer.svg)](https://pypi.org/project/map-packer/)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/map-packer.svg)](https://pypi.org/project/map-packer/)
+[![Test Status](https://github.com/wockkkk/map-packer/actions/workflows/ci.yml/badge.svg)](https://github.com/wockkkk/map-packer/actions/workflows/ci.yml)
+[![Codecov](https://codecov.io/gh/wockkkk/map-packer/branch/main/graph/badge.svg?token=map-packer)](https://codecov.io/gh/wockkkk/map-packer)
 
 一个用于 Minecraft 地图打包的命令行工具，支持世界同步、数据精简、格式压缩和一键发布。
+
+## 特性
+
+- 📦 **智能同步**：同步 Minecraft 世界存档到目标目录，自动忽略指定文件
+- 🗑️ **世界优化**：剔除无效区块文件，擦除区块缓存，减小世界体积
+- 📁 **格式压缩**：支持 zip、tar、tar.gz 等多种压缩格式
+- 🎯 **数据精简**：可选精简 datapack，去除注释和空行，压缩 JSON 格式
+- 🏷️ **版本管理**：自动根据名称、时间戳生成版本化存档名
+- ⚡ **一次性打包**：`mmp once` 命令适合单次使用或 CI/CD 场景
+- 📚 **完整帮助**：`mmp help` 提供所有命令的详细文档
+
+## 安装
+
+```bash
+# 使用 pip 安装
+pip install map-packer
+
+# 或使用 uv 安装
+uv add map-packer
+
+# 验证安装
+mmp --version
+```
+
+## 使用样例
+
+### 快速打包
+
+一次性打包命令，无需配置：
+
+```bash
+# 基本用法
+mmp once /path/to/map -o ./output.zip
+
+# 指定格式和压缩级别
+mmp once ./map -o ./release.tar.gz -f tar.gz -l 9
+
+# 包含数据精简
+mmp once ./map -o ./result.zip
+```
+
+### 完整工作流
+
+如果你需要版本化管理，使用完整流程：
+
+```bash
+# 初始化项目 (交互式输入存档路径)
+mmp init
+
+# 同步世界存档到 map 目录
+mmp sync
+
+# 打包为版本化的压缩文件
+mmp pack
+```
+
+在 `mmp init` 时，系统会提示你输入 Minecraft 存档目录。路径会被保存到 `mmp.json` 中，下次运行 `mmp sync` 直接使用即可。
+
+最终生成的压缩文件位于 `./dist` 目录，随时可以分发或发布到 GitHub 发行版。
+
+## 命令文档
+
+### `mmp help` - 显示帮助信息
+
+```bash
+mmp help              # 显示主帮助
+mmp help <command>    # 显示特定命令详情
+```
+
+### `mmp init` - 初始化项目
+
+在当前位置创建 mmp 项目：
+
+- 自动执行 `git init`（如果 git 可用）
+- 交互式询问存档路径并保存到 `mmp.json`
+- 生成 `mmp.json` 默认配置
+- 创建 `.github/workflows/pack.yml`（用于 GitHub 发布）
+- 创建地图输出目录
+
+```bash
+mmp init
+```
+
+### `mmp sync` - 同步世界
+
+将 Minecraft 存档同步到项目目录：
+
+- 从 `mmp.json` 的 `data.sync.save_path` 读取源世界
+- 根据 `mmp.json` 配置忽略规则
+- 可选剔除未使用区块和优化缓存
+
+```bash
+mmp sync [-c <config>]
+```
+
+### `mmp pack` - 版本化打包
+
+将地图打包为带版本的压缩文件：
+
+- 使用 `mmp.json` 中的 `data.pack` 配置
+- 输出文件名格式：`{name} {date}-{hash}`
+- 自动记录体积变化
+- 支持数据精简
+
+```bash
+mmp pack [-c <config>]
+```
+
+### `mmp once` - 快速打包
+
+一次性打包命令，无需配置：
+
+- 直接指定输入目录和输出文件
+- 快速打包而不依赖配置文件
+
+使用方式:
+```bash
+mmp once <input-path> -o <output-path>
+
+选项:
+  -o, --output    输出文件路径
+  -f, --format    压缩格式 (zip, tar, tar.gz, tar.bz2, tar.xz)
+  -l, --level     压缩级别 (0-9, 0 为不压缩)
+  -m, --minify    精简 datapack（默认： true）
+
+示例:
+  mmp once /path/to/map -o ./output.zip
+  mmp once ./map -o ./release.tar.gz -f tar.gz -l 9
+```
+
+## TODO
+
+- [ ] 添加 JPEG/PNG 转换
+- [ ] 支持更复杂的数据包优化
+- [ ] 添加预构建版和 Docker 部署
+- [ ] 支持远程世界目录同步
+
+## 贡献指南
+
+欢迎参与项目贡献！请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 了解如何为项目做贡献。
+
+### 开发设置
+
+```bash
+# 克隆项目
+git clone https://github.com/wockkkk/map-packer.git
+cd map-packer
+
+# 安装开发依赖
+uv add -d pytest pytest-cov
+```
+
+### 运行测试
+
+```bash
+pytest tests/ -v
+```
+
+### 代码格式化
+
+```bash
+black src/ tests/
+flake8 src/ tests/
+```
+
+## 许可证
+
+本项目采用 [MIT 许可证](LICENSE) - 详见 [LICENSE](LICENSE) 文件。
+
+## 更新历史
+
+### [0.1.1] - 2024-01-15
+
+- ✨ 添加 `mmp help` 和 `mmp once` 命令
+- 🔄 移除 `.env` 依赖，改为交互式输入
+- 📚 完善帮助系统和文档
+- ✅ 添加完整单元测试覆盖
+- 🚀 配置 GitHub Actions CI/CD
+
+### [0.1.0] - 2024-01-01
+
+- 初始版本发布
+
 
 ## 特性
 
