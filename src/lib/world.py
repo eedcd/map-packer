@@ -8,6 +8,9 @@
 - 优化世界（optimize）：参考 Minecraft「优化世界」中的 eraseCache 行为，
   删除 Heightmaps、isLightOn 以及每个 section 的 BlockLight / SkyLight，
   让游戏首次进入存档时重新计算光照与高度图
+
+区块字段名与实体存放位置随游戏版本变化（1.17 拆分实体、1.18 区块扁平化、
+1.14 起才有光照缓存标记），具体行为由配置的 game_version 决定
 """
 
 from __future__ import annotations
@@ -19,6 +22,8 @@ from pathlib import Path
 
 import nbtlib
 from nbtlib import Compound
+
+from lib.config import GameVersion
 
 # region 文件按 4KiB 扇区对齐，前两个扇区为头部（位置表 + 时间戳表）
 SECTOR_SIZE = 4096
@@ -32,6 +37,24 @@ _COMPRESSION_NONE = 3
 # 需要擦除的缓存字段
 _CACHE_KEYS = ("Heightmaps", "isLightOn")
 _SECTION_LIGHT_KEYS = ("BlockLight", "SkyLight")
+
+# 1.18 起实体与计划刻改为下划线字段，更早的版本用 Level 下的大驼峰字段
+# 两套命名同时检查，避免配置的版本与实际存档不一致时误删区块
+_CHUNK_CONTENT_KEYS = (
+    "entities",
+    "block_entities",
+    "block_ticks",
+    "fluid_ticks",
+    "Entities",
+    "TileEntities",
+    "TileTicks",
+    "ToBeTicked",
+    "LiquidTicks",
+    "LiquidsToBeTicked",
+)
+
+# 结构起点字段，1.18 前后分别为 structures.starts 与 Structures.Starts
+_STRUCTURE_KEYS = (("structures", "starts"), ("Structures", "Starts"))
 
 # 每个 region 最多容纳 32 × 32 个区块
 _CHUNKS_PER_REGION = 32 * 32
@@ -153,21 +176,25 @@ def _is_pristine(level: Compound) -> bool:
     - 没有任何待处理的后处理标记；
     - 没有任何结构起点
 
+    1.18 起区块字段改为下划线命名，更早的版本字段名在 Level 之下，
+    这里同时检查两套命名
+
     这类区块可安全删除，游戏会依据世界种子重新生成相同的地形
     """
     if int(level.get("InhabitedTime", 0)) != 0:
         return False
 
-    for key in ("block_entities", "block_ticks", "fluid_ticks", "entities"):
+    for key in _CHUNK_CONTENT_KEYS:
         if not _is_empty_list(level.get(key)):
             return False
 
     if _has_post_processing(level):
         return False
 
-    structures = level.get("structures")
-    if structures is not None and len(structures.get("starts") or {}) > 0:
-        return False
+    for container, starts_key in _STRUCTURE_KEYS:
+        structures = level.get(container)
+        if structures is not None and len(structures.get(starts_key) or {}) > 0:
+            return False
 
     return True
 
@@ -179,6 +206,41 @@ def _is_pristine_chunk(raw: bytes) -> bool:
         return False
     chunk, _compression = parsed
     return _is_pristine(_level_of(chunk))
+
+
+def _entities_file(region: Path) -> Path | None:
+    """返回 region 文件对应的 entities 区域文件
+
+    1.17 起实体存放在维度目录下与 region 平级的 entities 目录
+    """
+    if region.parent.name != "region":
+        return None
+    return region.parent.parent / "entities" / region.name
+
+
+def _chunk_has_entities(entities: bytes | None, index: int) -> bool:
+    """判断 entities 区域文件中同一区块是否存有实体
+
+    无法解析时按存有实体处理，避免误删
+    """
+    if not entities or len(entities) < HEADER_SIZE:
+        return False
+
+    entry = int.from_bytes(entities[index * 4:index * 4 + 4], "big")
+    offset, count = entry >> 8, entry & 0xFF
+    if offset < 2 or count == 0:
+        return False
+
+    raw = entities[offset * SECTOR_SIZE:offset * SECTOR_SIZE + count * SECTOR_SIZE]
+    if len(raw) < 5:
+        return False
+
+    parsed = _parse_chunk(raw)
+    if parsed is None:
+        return True
+
+    chunk, _compression = parsed
+    return not _is_empty_list(chunk.get("Entities"))
 
 
 def _rebuild_region(
@@ -216,9 +278,14 @@ def _rebuild_region(
     return bytes(header) + bytes(payload)
 
 
-def _build_pruned(data: bytes) -> tuple[bytes, int]:
+def _build_pruned(
+    data: bytes,
+    version: GameVersion,
+    entities_data: bytes | None = None,
+) -> tuple[bytes, int]:
     """删除 region 文件中未改动的原始区块，返回 (处理后的字节, 删除区块数)
 
+    1.17 起实体存放在独立的 entities 区域文件，同一区块内有实体时保留
     未删除任何区块时原样返回输入字节
     """
     if len(data) < HEADER_SIZE:
@@ -239,7 +306,10 @@ def _build_pruned(data: bytes) -> tuple[bytes, int]:
             continue
 
         if _is_pristine_chunk(raw):
-            removed += 1
+            if version.split_entities and _chunk_has_entities(entities_data, index):
+                entries.append((index, raw))
+            else:
+                removed += 1
         else:
             entries.append((index, raw))
 
@@ -303,10 +373,21 @@ def _optimize_region(path: Path) -> int:
     return changed
 
 
-def _prune_region(path: Path) -> int:
+def _prune_region(path: Path, version: GameVersion) -> int:
     """删除单个 region 文件中未改动的原始区块，返回删除的区块数"""
     data = path.read_bytes()
-    pruned, removed = _build_pruned(data)
+
+    entities_data: bytes | None = None
+    if version.split_entities:
+        entities_path = _entities_file(path)
+        if entities_path is not None and entities_path.exists():
+            try:
+                entities_data = entities_path.read_bytes()
+            except OSError:
+                # 读不到实体数据时放弃处理，避免连同实体一起丢失
+                return 0
+
+    pruned, removed = _build_pruned(data, version, entities_data)
     if removed == 0:
         return 0
     path.write_bytes(pruned)
@@ -314,9 +395,15 @@ def _prune_region(path: Path) -> int:
 
 
 def _transform_region(
-    source: bytes, prune: bool, optimize: bool
+    source: bytes,
+    prune: bool,
+    optimize: bool,
+    version: GameVersion,
+    entities_data: bytes | None = None,
 ) -> tuple[bytes, int, int]:
     """按 prune / optimize 顺序处理 region 字节
+
+    1.17 起需要同时传入同一区块在 entities 区域文件中的数据
 
     Returns:
         (处理后的字节, 删除区块数, 擦除缓存区块数)
@@ -324,13 +411,28 @@ def _transform_region(
     removed = 0
     changed = 0
     if prune:
-        source, removed = _build_pruned(source)
+        source, removed = _build_pruned(source, version, entities_data)
     if optimize:
         source, changed = _build_optimized(source)
     return source, removed, changed
 
 
-def region_matches(src: Path, dst: Path, prune: bool, optimize: bool) -> bool:
+def _read_entities(region: Path, version: GameVersion) -> bytes | None:
+    """读取 region 文件对应的实体数据，旧版本或无文件时返回 None"""
+    if not version.split_entities:
+        return None
+    path = _entities_file(region)
+    if path is None or not path.exists():
+        return None
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def region_matches(
+    src: Path, dst: Path, prune: bool, optimize: bool, version: GameVersion
+) -> bool:
     """判断 dst 是否等于 src 经 prune / optimize 处理后的结果
 
     prune 与 optimize 都会重写 region 文件，使目标文件不再与源逐字节一致
@@ -342,24 +444,38 @@ def region_matches(src: Path, dst: Path, prune: bool, optimize: bool) -> bool:
     except OSError:
         return False
 
-    transformed, removed, changed = _transform_region(source, prune, optimize)
+    transformed, removed, changed = _transform_region(
+        source, prune, optimize, version, _read_entities(src, version)
+    )
     return (removed > 0 or changed > 0) and transformed == target
 
 
-def prune_world(root: Path) -> tuple[int, int]:
+def _terrain_regions(root: Path):
+    """产出存档目录下的地形区域文件
+
+    entities / poi 目录同样存放 .mca，但它们是实体与兴趣点数据，
+    区块结构与地形不同，不能按地形区块处理
+    """
+    for path in sorted(root.rglob("*.mca")):
+        if path.parent.name == "region":
+            yield path
+
+
+def prune_world(root: Path, version: GameVersion) -> tuple[int, int]:
     """删除 root 目录下所有 region 文件中未改动的原始区块
 
     Args:
         root: 待处理的存档目录（通常为同步后的目标目录）
+        version: 游戏版本，决定实体是否存放在独立的 entities 区域文件
 
     Returns:
         (改动的 region 文件数, 删除的区块数)
     """
     files = 0
     chunks = 0
-    for region in sorted(root.rglob("*.mca")):
+    for region in _terrain_regions(root):
         try:
-            removed = _prune_region(region)
+            removed = _prune_region(region, version)
         except OSError:
             continue
         if removed:
@@ -379,7 +495,7 @@ def optimize_world(root: Path) -> tuple[int, int]:
     """
     files = 0
     chunks = 0
-    for region in sorted(root.rglob("*.mca")):
+    for region in _terrain_regions(root):
         try:
             changed = _optimize_region(region)
         except OSError:

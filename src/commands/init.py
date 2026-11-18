@@ -18,7 +18,7 @@ from lib import ui
 
 # 默认配置，字段与 sync / pack 命令读取的 data 字段保持一致
 DEFAULT_CONFIG = {
-    "version": "0.0.2",
+    "game_version": "26.3",
     "name": "map",
     "data": {
         "sync": {

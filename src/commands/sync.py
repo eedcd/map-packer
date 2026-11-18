@@ -26,7 +26,7 @@ from rich.progress import (
 )
 
 from lib import ui
-from lib.config import SUPPORTED_VERSION, get_config
+from lib.config import GameVersion, get_config, parse_game_version
 from lib.world import optimize_world, prune_world, region_matches
 
 DEFAULT_EXCLUDES = ()
@@ -129,7 +129,9 @@ def _same_file(a: Path, b: Path) -> bool:
         return False
 
 
-def _files_match(src: Path, dst: Path, optimize: bool, prune: bool) -> bool:
+def _files_match(
+    src: Path, dst: Path, optimize: bool, prune: bool, version: GameVersion
+) -> bool:
     """判断源文件与目标文件是否一致
 
     启用 prune / optimize 时，已被剔除区块或擦除缓存的 region 文件与源文件
@@ -137,13 +139,17 @@ def _files_match(src: Path, dst: Path, optimize: bool, prune: bool) -> bool:
     """
     if _same_file(src, dst):
         return True
-    if src.suffix == ".mca" and (optimize or prune):
-        return region_matches(src, dst, prune=prune, optimize=optimize)
+    if src.suffix == ".mca" and src.parent.name == "region" and (optimize or prune):
+        return region_matches(src, dst, prune=prune, optimize=optimize, version=version)
     return False
 
 
 def _plan(
-    source: dict[str, Path], target: Path, optimize: bool, prune: bool
+    source: dict[str, Path],
+    target: Path,
+    optimize: bool,
+    prune: bool,
+    version: GameVersion,
 ):
     """计算同步计划，返回 (待复制列表, 待删除列表)"""
     to_copy: list[tuple[Path, Path]] = []
@@ -151,7 +157,7 @@ def _plan(
 
     for rel, src in source.items():
         dst = target / rel
-        if dst.exists() and _files_match(src, dst, optimize, prune):
+        if dst.exists() and _files_match(src, dst, optimize, prune, version):
             continue
         to_copy.append((src, dst))
 
@@ -218,12 +224,14 @@ def sync(
     - files present only in the target are deleted;
     - the target directory, ignore rules and sync options come from the
       "data.sync" field in mmp.json;
-    - mmp.json must declare version 0.0.2, the only supported format version.
+    - the game version comes from the top-level "game_version" field
+      (default 26.3) and selects the save structure to work with;
     - when prune is enabled, chunks that were generated from world noise and never
       modified (no entities, block entities, ticks or block changes) are removed
       after syncing; the game regenerates them from the seed on first load.
     - when optimize is enabled, cached light and heightmap data is erased from
-      the synced chunks so the game recomputes them on first load.
+      the synced chunks so the game recomputes them on first load; this is
+      skipped before 1.14, where the game does not rebuild the cache.
     - the size change and shrink percentage against the source save are reported
       after syncing.
 
@@ -231,8 +239,8 @@ def sync(
         config: Path to the mmp.json configuration file.
 
     Raises:
-        typer.Exit: When SAVE_PATH is unset or is not a valid directory, or the
-            mmp.json version is unsupported.
+        typer.Exit: When SAVE_PATH is unset or is not a valid directory, or
+            game_version is malformed.
     """
     env_file = find_dotenv(usecwd=True)
     if env_file:
@@ -257,19 +265,22 @@ def sync(
 
     # 读取配置：忽略规则与同步选项位于 mmp.json 的 data.sync 字段
     config_data = get_config(config)
-    version = config_data.get("version")
-    if version != SUPPORTED_VERSION:
+    try:
+        game_version = parse_game_version(config_data.get("game_version"))
+    except ValueError:
         ui.error(
-            f"Unsupported mmp.json version: [path]{escape(str(version))}[/path]",
-            hint=f"only version {SUPPORTED_VERSION} is supported",
+            f"Invalid game_version: [path]"
+            f"{escape(str(config_data.get('game_version')))}[/path]",
+            hint="use a version like 26.3 or 1.21.11",
         )
         raise typer.Exit(code=1)
 
     data = config_data.get("data") or {}
     sync_config = data.get("sync") or {}
 
-    optimize = bool(sync_config.get("optimize", True))
     prune = bool(sync_config.get("prune", True))
+    # 1.14 之前没有光照缓存标记，擦除后游戏不会重算，故跳过优化
+    optimize = bool(sync_config.get("optimize", True)) and game_version.cached_light
     target_raw = sync_config.get("output_path", "./map")
 
     excludes = sync_config.get("exclude") or list(DEFAULT_EXCLUDES)
@@ -285,9 +296,17 @@ def sync(
         [
             ("Source", f"[path]{escape(str(save_path))}[/path]"),
             ("Target", f"[path]{escape(str(target))}[/path]"),
+            ("Game", f"[value]{game_version}[/value]"),
             ("Ignore", f"[num]{len(patterns)}[/num] [muted]pattern(s)[/muted]"),
             ("Prune", "[ok]enabled[/ok]" if prune else "[muted]disabled[/muted]"),
-            ("Optimize", "[ok]enabled[/ok]" if optimize else "[muted]disabled[/muted]"),
+            (
+                "Optimize",
+                "[ok]enabled[/ok]"
+                if optimize
+                else "[muted]disabled"
+                + ("" if game_version.cached_light else " · requires 1.14+")
+                + "[/muted]",
+            ),
         ],
     )
     ui.blank()
@@ -308,7 +327,7 @@ def sync(
             pass
 
     with ui.console.status("[brand]Computing diff…[/brand]", spinner="dots"):
-        to_copy, to_delete = _plan(source, target, optimize, prune)
+        to_copy, to_delete = _plan(source, target, optimize, prune, game_version)
     ui.phase(
         "Planning",
         f"[ok]+{len(to_copy):,}[/ok] [muted]add[/muted]   "
@@ -373,7 +392,7 @@ def sync(
     if prune:
         ui.blank()
         with ui.console.status("[brand]Pruning chunks…[/brand]", spinner="dots"):
-            region_files, chunks = prune_world(target)
+            region_files, chunks = prune_world(target, game_version)
         if chunks:
             ui.phase(
                 "Prune",

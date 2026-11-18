@@ -26,7 +26,7 @@ from rich.progress import (
 )
 
 from lib import ui
-from lib.config import SUPPORTED_VERSION, get_config
+from lib.config import get_config
 from lib.datapack import minify_datapacks
 
 # 各配置项的默认值，字段与 init 写入的 data.pack 保持一致
@@ -187,25 +187,17 @@ def pack(
       comments (lines starting with #) and blank lines removed, and every JSON
       file is rewritten without indentation or spaces before packing;
     - the packed size change and shrink percentage are reported when packing;
-    - supported formats are zip, tar, tar.gz, tar.bz2 and tar.xz;
-    - mmp.json must declare version 0.0.2, the only supported format version.
+    - supported formats are zip, tar, tar.gz, tar.bz2 and tar.xz.
 
     Args:
         config: Path to the mmp.json configuration file.
 
     Raises:
         typer.Exit: When the source directory is missing, the format is
-            unsupported, or the mmp.json version is unsupported.
+            unsupported, or the compression level is out of range.
     """
     # 读取配置：打包选项位于 mmp.json 的 data.pack 字段
     config_data = get_config(config)
-    version = config_data.get("version")
-    if version != SUPPORTED_VERSION:
-        ui.error(
-            f"Unsupported mmp.json version: [path]{escape(str(version))}[/path]",
-            hint=f"only version {SUPPORTED_VERSION} is supported",
-        )
-        raise typer.Exit(code=1)
 
     data = config_data.get("data") or {}
     pack_config = data.get("pack") or {}
