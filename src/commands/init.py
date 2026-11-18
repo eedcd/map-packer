@@ -79,9 +79,19 @@ jobs:
         id: archive
         run: |
           archive="$(ls -t dist/* | head -n 1)"
+          base="$(basename "$archive")"
+          case "$base" in
+            *.tar.gz) stem="${base%.tar.gz}" ;;
+            *.tar.bz2) stem="${base%.tar.bz2}" ;;
+            *.tar.xz) stem="${base%.tar.xz}" ;;
+            *.*) stem="${base%.*}" ;;
+            *) stem="$base" ;;
+          esac
+          version="$(printf '%s' "$stem" | grep -oE '[0-9]{8}-[0-9a-f]{6}$' || true)"
           echo "path=$archive" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename "$archive")" >> "$GITHUB_OUTPUT"
-          echo "tag=$(basename "$archive" | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+          echo "name=$stem" >> "$GITHUB_OUTPUT"
+          echo "tag=${version:-$(echo "$stem" | tr ' ' '-')}" >> "$GITHUB_OUTPUT"
+          echo "title=${version:-$stem}" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
         env:
@@ -89,7 +99,7 @@ jobs:
         run: |
           gh release create "${{ steps.archive.outputs.tag }}" \\
             "${{ steps.archive.outputs.path }}" \\
-            --title "${{ steps.archive.outputs.name }}" \\
+            --title "${{ steps.archive.outputs.title }}" \\
             --notes "$(git log -1 --pretty=%B)"
 """
 

@@ -129,7 +129,7 @@ def _same_file(a: Path, b: Path) -> bool:
         return False
 
 
-def _files_match(src: Path, dst: Path, optimize: bool, prune: bool) -> bzool:
+def _files_match(src: Path, dst: Path, optimize: bool, prune: bool) -> bool:
     """判断源文件与目标文件是否一致
 
     启用 prune / optimize 时，已被剔除区块或擦除缓存的 region 文件与源文件
