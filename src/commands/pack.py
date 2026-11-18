@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import tarfile
 import time
 import zipfile
@@ -128,12 +129,25 @@ def _collect_files(root: Path) -> list[tuple[Path, str]]:
     return files
 
 
-def _write_zip(target: Path, files: list[tuple[Path, str]], level: int, advance) -> None:
-    """把文件写入 zip 归档，level 为 0 时改用仅存储模式"""
+def _write_zip(
+    target: Path,
+    files: list[tuple[Path, str]],
+    level: int,
+    advance,
+    overrides: dict[Path, bytes],
+) -> None:
+    """把文件写入 zip 归档，level 为 0 时改用仅存储模式
+
+    overrides 中的文件用内存中的精简内容写入，源文件不被修改
+    """
     if level == 0:
         with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_STORED) as zf:
             for full, rel in files:
-                zf.write(full, arcname=rel)
+                data = overrides.get(full)
+                if data is None:
+                    zf.write(full, arcname=rel)
+                else:
+                    zf.writestr(rel, data)
                 advance()
         return
 
@@ -141,12 +155,26 @@ def _write_zip(target: Path, files: list[tuple[Path, str]], level: int, advance)
         target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=level
     ) as zf:
         for full, rel in files:
-            zf.write(full, arcname=rel)
+            data = overrides.get(full)
+            if data is None:
+                zf.write(full, arcname=rel)
+            else:
+                zf.writestr(rel, data)
             advance()
 
 
-def _write_tar(target: Path, fmt: str, files: list[tuple[Path, str]], level: int, advance) -> None:
-    """把文件写入 tar 归档，按格式选择对应的压缩器与参数"""
+def _write_tar(
+    target: Path,
+    fmt: str,
+    files: list[tuple[Path, str]],
+    level: int,
+    advance,
+    overrides: dict[Path, bytes],
+) -> None:
+    """把文件写入 tar 归档，按格式选择对应的压缩器与参数
+
+    overrides 中的文件用内存中的精简内容写入，源文件不被修改
+    """
     mode = {
         "tar": "w",
         "tar.gz": "w:gz",
@@ -162,7 +190,13 @@ def _write_tar(target: Path, fmt: str, files: list[tuple[Path, str]], level: int
 
     with tarfile.open(target, mode, **kwargs) as tf:
         for full, rel in files:
-            tf.add(full, arcname=rel)
+            data = overrides.get(full)
+            if data is None:
+                tf.add(full, arcname=rel)
+            else:
+                info = tf.gettarinfo(str(full), arcname=rel)
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
             advance()
 
 
@@ -185,7 +219,8 @@ def pack(
       time;
     - when "data.pack.minify_datapack" is enabled, datapack text files have their
       comments (lines starting with #) and blank lines removed, and every JSON
-      file is rewritten without indentation or spaces before packing;
+      file is written without indentation or spaces; this only affects the
+      archive contents, the source map directory is left untouched;
     - the packed size change and shrink percentage are reported when packing;
     - supported formats are zip, tar, tar.gz, tar.bz2 and tar.xz.
 
@@ -280,10 +315,12 @@ def pack(
     source_size = sum(path.stat().st_size for path, _rel in files)
 
     # 精简数据包：去除注释与空行、把 JSON 压缩为无缩进无空格格式
+    # 精简结果只写入归档，源目录保持不变
+    overrides: dict[Path, bytes] = {}
     if minify:
         ui.blank()
         with ui.console.status("[brand]Minifying datapacks…[/brand]", spinner="dots"):
-            datapack_files, datapack_saved = minify_datapacks(source)
+            overrides, datapack_files, datapack_saved = minify_datapacks(source)
         if datapack_files:
             ui.phase(
                 "Minify",
@@ -316,9 +353,9 @@ def pack(
             progress.advance(task)
 
         if fmt == "zip":
-            _write_zip(target, files, level, advance)
+            _write_zip(target, files, level, advance, overrides)
         else:
-            _write_tar(target, fmt, files, level, advance)
+            _write_tar(target, fmt, files, level, advance, overrides)
 
     elapsed = time.perf_counter() - started
     size = target.stat().st_size
